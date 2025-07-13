@@ -19,6 +19,8 @@ interface StoredPhoto {
 const PACKAGE_NAME = process.env.PACKAGE_NAME ?? (() => { throw new Error('PACKAGE_NAME is not set in .env file'); })();
 const MENTRAOS_API_KEY = process.env.MENTRAOS_API_KEY ?? (() => { throw new Error('MENTRAOS_API_KEY is not set in .env file'); })();
 const PORT = parseInt(process.env.PORT || '3000');
+// Add this environment variable at the top with your other constants
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY ?? (() => { throw new Error('GOOGLE_MAPS_API_KEY is not set in .env file'); })();
 
 /**
  * MentraOS App combining photo capture, audio interaction, and webview
@@ -47,6 +49,15 @@ class ExampleMentraOSApp extends AppServer {
 
     // Show welcome message and play TTS
     session.layouts.showTextWall("Example App is ready!");
+    session.location.subscribeToStream({ accuracy: 'high' }, async (data) => {
+      session.logger.info(`User is at: ${data.lat}, ${data.lng}`);
+      
+      // Get and log the address
+      const address = await this.reverseGeocode(data.lat, data.lng);
+      if (address) {
+        session.logger.info(`User address: ${address}`);
+      }
+    });
     try {
       const result = await session.audio.speak("Welcome to Mentra OS! This is your audio assistant.");
 
@@ -67,7 +78,7 @@ class ExampleMentraOSApp extends AppServer {
         this.logger.info(`Streaming photos for user ${userId} is now ${this.isStreamingPhotos.get(userId)}`);
         return;
       } else {
-        session.layouts.showTextWall("Button pressed, about to take photo", { durationMs: 4000 });
+        session.logger.info("Button pressed, about to take photo", { durationMs: 4000 });
         try {
           const photo = await session.camera.requestPhoto();
           this.logger.info(`Photo taken for user ${userId}, timestamp: ${photo.timestamp}`);
@@ -95,24 +106,15 @@ class ExampleMentraOSApp extends AppServer {
     // Transcription events
     session.events.onTranscription(async (data) => {
       if (data.isFinal) {
-        const transcribedText = data.text;
-        session.layouts.showTextWall("You said: " + transcribedText, {
+        session.layouts.showTextWall("You said: " + data.text, {
           view: ViewType.MAIN,
-          durationMs: 3000,
+          durationMs: 3000
         });
-
         try {
-          const result = await session.audio.speak(`You said: ${transcribedText}`, {
-            voice_settings: {
-              stability: 0.7,
-              similarity_boost: 0.8,
-              style: 0.3,
-              speed: 0.9
-            }
-          });
-
+          const result = await session.audio.speak(data.text);
+    
           if (result.success) {
-            session.logger.info("✅ TTS playback successful");
+            session.logger.info("✅ Speech synthesis successful");
           } else {
             session.logger.error(`❌ TTS failed: ${result.error}`);
           }
@@ -120,7 +122,7 @@ class ExampleMentraOSApp extends AppServer {
           session.logger.error(`Exception during TTS: ${error}`);
         }
       }
-    });
+    })
 
     // Battery level logs
     session.events.onGlassesBattery((data) => {
@@ -148,6 +150,32 @@ class ExampleMentraOSApp extends AppServer {
     this.photos.set(userId, cachedPhoto);
     this.latestPhotoTimestamp.set(userId, cachedPhoto.timestamp.getTime());
     this.logger.info(`Photo cached for user ${userId}, timestamp: ${cachedPhoto.timestamp}`);
+  }
+
+  /**
+   * Reverse geocode coordinates to get human-readable address
+   */
+  private async reverseGeocode(latitude: number, longitude: number): Promise<string | null> {
+    try {
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${GOOGLE_MAPS_API_KEY}`
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch address from Google Maps');
+      }
+
+      const data = await response.json();
+
+      if (data.results && data.results.length > 0) {
+        return data.results[0].formatted_address;
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.error(`Geocoding error: ${error}`);
+      return null;
+    }
   }
 
   private setupWebviewRoutes(): void {
